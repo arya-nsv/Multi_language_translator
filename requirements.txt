@@ -1,3 +1,5 @@
-transformers
+gradio>=4.31
+transformers>=4.31
 torch
-gradio
+sentencepiece
+tokenizers
