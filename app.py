@@ -1,48 +1,69 @@
+# app.py
 import torch
 import gradio as gr
 import json
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 
-# Use a pipeline as a high-level helper
-from transformers import pipeline
+# Choose device: 0 for GPU (if available), -1 for CPU
+device = 0 if torch.cuda.is_available() else -1
 
-model_path= ("../Models/models--facebook--nllb-200-distilled-600M/snapshots"
-             "/f8d333a098d19b4fd9a8b18f94170487ad3f821d")
+# Use the HF model name (will be downloaded if not present)
+HF_MODEL = "facebook/nllb-200-distilled-600M"
 
-text_translator = pipeline("translation", model="facebook/nllb-200-distilled-600M",
-                           torch_dtype=torch.bfloat16)
+# create the pipeline without forcing bfloat16 (avoid CPU-only bfloat16 error)
+try:
+    text_translator = pipeline(
+        "translation",
+        model=HF_MODEL,
+        device=device,
+        # do not force torch_dtype unless you know the environment supports it
+    )
+except Exception as e:
+    # Fallback to a user-friendly pipeline creation error (so UI doesn't crash silently)
+    text_translator = None
+    creation_error = str(e)
 
-# text_translator = pipeline("translation", model=model_path,
-#                            torch_dtype=torch.bfloat16)
 # Load the JSON data from the file
-with open('language.json', 'r') as file:
+with open('language.json', 'r', encoding='utf-8') as file:
     language_data = json.load(file)
 
-def get_FLORES_code_from_language(language):
-    for entry in language_data:
-        if entry['Language'].lower() == language.lower():
-            return entry['FLORES-200 code']
-    return None
+# prepare dropdown mapping (Language name -> FLORES code)
+language_map = {entry['Language']: entry['FLORES-200 code'] for entry in language_data}
 
+def get_FLORES_code_from_language(language):
+    return language_map.get(language)
 
 def translate_text(text, destination_language):
-    # text = "Hello Friends, How are you?"
-    dest_code= get_FLORES_code_from_language(destination_language)
-    translation = text_translator(text,
-                                  src_lang="eng_Latn",
-                                  tgt_lang=dest_code)
-    return translation[0]["translation_text"]
+    if text is None or text.strip() == "":
+        return "Please enter some input text."
+
+    if text_translator is None:
+        return f"Translation pipeline unavailable. Error creating pipeline: {creation_error}"
+
+    dest_code = get_FLORES_code_from_language(destination_language)
+    if dest_code is None:
+        return f"Destination language code not found for '{destination_language}'."
+
+    try:
+        # Some translation pipelines expect src_lang/tgt_lang kwargs
+        result = text_translator(text, src_lang="eng_Latn", tgt_lang=dest_code)
+        # pipeline returns a list of dicts
+        return result[0].get("translation_text", str(result))
+    except Exception as e:
+        return f"Error during translation: {e}"
 
 gr.close_all()
 
-# demo = gr.Interface(fn=summary, inputs="text",outputs="text")
-demo = gr.Interface(fn=translate_text,
-                    inputs=[gr.Textbox(label="Input text to translate",lines=6), gr.Dropdown(["German","French", "Hindi", "Romanian	"], label="Select Destination Language")],
-                    outputs=[gr.Textbox(label="Translated text",lines=4)],
-                    title="@GenAILearniverse Project 4: Multi language translator",
-                    description="THIS APPLICATION WILL BE USED TO TRNSLATE ANY ENGLIST TEXT TO MULTIPLE LANGUAGES.")
-demo.launch()
+demo = gr.Interface(
+    fn=translate_text,
+    inputs=[
+        gr.Textbox(label="Input text to translate", lines=6),
+        gr.Dropdown(sorted(list(language_map.keys())), label="Select Destination Language")
+    ],
+    outputs=[gr.Textbox(label="Translated text", lines=4)],
+    title="@GenAILearniverse Project 4: Multi language translator",
+    description="Translate English text to many languages (FLORES codes)."
+)
 
-
-
-
-
+if __name__ == "__main__":
+    demo.launch()
